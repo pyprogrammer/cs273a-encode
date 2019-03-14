@@ -1,9 +1,3 @@
-#!/usr/bin/env python
-# coding: utf-8
-
-# In[1]:
-
-
 import numpy as np
 import os
 import tensorflow as tf
@@ -20,40 +14,23 @@ import multiprocessing as mp
 import bisect
 import time
 
-# In[2]:
-
 
 numpy_path = "../data/np_train/"
 fasta_path = "../data/GRCh38_no_alt_analysis_set_GCA_000001405.15.fasta.gz"
 model_dir = "./model_cross/"
 quantiles_dir = "./quantiles_cross/"
 
-
-# In[3]:
-
-
 chromosomes = [f"chr{i}" for i in range(1, 23)] + ["chrX"]
-
-
-# In[4]:
-
 
 def window(window_size):
     return range(-(window_size // 2), window_size // 2 + 1)
-
-
-# In[5]:
-
 
 num_cell_lines = 51
 cell_line_keypoints = 64
 num_assays = 35
 assay_keypoints = 64
 
-
-# In[6]:
-
-
+# Copied from ENCODE website
 s = """chr1    248956422
 chr2    242193529
 chr3    198295559
@@ -81,15 +58,7 @@ chrom_length_map = {
     k: int(v) for k, v in (line.split() for line in s.split("\n"))
 }
 
-
-# In[7]:
-
-
 base_symbols = list("ACGTWSMKRYBDHVNZ")
-
-
-# In[8]:
-
 
 references = {}
 with gzip.open(fasta_path, "rt") as seq_file:
@@ -97,16 +66,11 @@ with gzip.open(fasta_path, "rt") as seq_file:
         references[seq.id] = seq.upper()
 
 
-# In[9]:
-
-
 missing_val = -100.0
 
 def score_transform(s):
     if np.isnan(s):
         return missing_val
-#     return np.log(s + 1e-10)
-    # sigmoid transform to squish ends, centered about 0.05
     return np.tanh(s + np.log(0.05))
 
 def find_value(arr, key):
@@ -125,9 +89,6 @@ def find_value(arr, key):
 
 def get_filename(line, assay, chrom):
     return os.path.abspath(os.path.join(numpy_path, f"{line}_{assay}_{chrom}.npy"))
-
-
-# In[10]:
 
 
 def create_feature_columns(window_size):
@@ -211,8 +172,12 @@ def parallel_get_random_input(num_chrom_samples, sample_intervals, window_size):
         return pd.concat(pool.starmap(get_random_input, args), ignore_index=True)
 
 def get_input_fn(num_chrom_samples, sample_intervals, window_size, threads=16):
+    
+    # Use this block if you've saved the random inputs already. This takes a substantial portion of time
     with pd.HDFStore(f"train_65536_{window_size}.hdf") as hdfs:
         df = hdfs.get(random.choice(hdfs.keys()))
+        
+    # This fetches a fresh block every time but is quite time consuming
     # df = parallel_get_random_input(num_chrom_samples, sample_intervals, window_size)
     return tf.estimator.inputs.pandas_input_fn(
         x=df.drop(axis=1, columns="scores"),
@@ -221,9 +186,6 @@ def get_input_fn(num_chrom_samples, sample_intervals, window_size, threads=16):
         num_threads=threads,
         shuffle=True
     )
-
-
-# In[11]:
 
 
 def create_calibrated_etl(window_size, config, lattice_rank=4):
@@ -250,12 +212,10 @@ def create_calibrated_etl(window_size, config, lattice_rank=4):
     
     for i in range(1, num_cell_lines+1):
         hparams.set_feature_param(f"C{i}", "num_keypoints", cell_line_keypoints)
-#         hparams.set_feature_param(f"C{i}", "missing_input_value", missing_val)
-    
+
     for i in range(1, num_assays+1):
         hparams.set_feature_param(f"M{i}", "num_keypoints", assay_keypoints)
-#         hparams.set_feature_param(f"M{i}", "missing_input_value", missing_val)
-    
+   
     return tfl.calibrated_etl_regressor(
         feature_columns=feature_columns,
         model_dir=model_dir, config=config, hparams=hparams,
@@ -286,21 +246,15 @@ def create_calibrated_rtl(window_size, config, lattice_rank=4):
     
     for i in range(1, num_cell_lines+1):
         hparams.set_feature_param(f"C{i}", "num_keypoints", cell_line_keypoints)
-#         hparams.set_feature_param(f"C{i}", "missing_input_value", missing_val)
-    
+   
     for i in range(1, num_assays+1):
         hparams.set_feature_param(f"M{i}", "num_keypoints", assay_keypoints)
-#         hparams.set_feature_param(f"M{i}", "missing_input_value", missing_val)
-    
+
     return tfl.calibrated_rtl_regressor(
         feature_columns=feature_columns,
         model_dir=model_dir, config=config, hparams=hparams,
         quantiles_dir=os.path.join(quantiles_dir, str(window_size))
     )
-
-
-# In[12]:
-
 
 def train(estimator, iters, window_size, num_chrom_samples, sample_intervals):
     input_fn = functools.partial(get_input_fn, num_chrom_samples, sample_intervals, window_size)
@@ -312,20 +266,11 @@ def train(estimator, iters, window_size, num_chrom_samples, sample_intervals):
         evaluation = estimator.evaluate(input_fn=input_fn())
         print("Eval:", time.time())
         print(f"Current average_loss: {evaluation['average_loss']}")
-        
-
-
-# In[13]:
-
 
 window_size = 21
 num_chrom_samples = 4096
 sample_intervals = 16
 iterations = 32
-
-
-# In[14]:
-
 
 quantiles_path = os.path.join(quantiles_dir, str(window_size))
 if os.path.exists(quantiles_path):
@@ -336,20 +281,11 @@ tfl.save_quantiles_for_keypoints(
     feature_columns=create_feature_columns(window_size),
     num_steps=None)
 
-
-# In[15]:
-
-
-# if os.path.exists(model_dir):
-#     print("Removing Model Directory")
-#     shutil.rmtree(model_dir)
 print("Starting run")
 config = tf.estimator.RunConfig().replace(model_dir=model_dir)
 model = create_calibrated_rtl(window_size, config)
 train(model, iterations, window_size, num_chrom_samples, sample_intervals)
 
-
-# In[ ]:
 
 
 
